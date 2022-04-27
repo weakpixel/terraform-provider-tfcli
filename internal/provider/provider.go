@@ -30,7 +30,7 @@ func New(version string) func() *schema.Provider {
 			// 	"tf_data_source": dataSourceScaffolding(),
 			// },
 			ResourcesMap: map[string]*schema.Resource{
-				"tf_apply": resourceApply(),
+				"tfcli_apply": resourceApply(),
 			},
 		}
 
