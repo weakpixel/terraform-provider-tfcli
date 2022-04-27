@@ -1,9 +1,11 @@
 package provider
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -42,34 +44,30 @@ func resourceApply() *schema.Resource {
 				Description: "Terraform Module Version",
 				Type:        schema.TypeString,
 				Required:    true,
-				ForceNew:    true,
 			},
 			"vars": {
 				Description: "Terraform module variables",
 				Type:        schema.TypeMap,
 				Optional:    true,
-				ForceNew:    true,
 			},
 			"backend_config": {
 				Description: "Terraform module backend variables",
 				Type:        schema.TypeMap,
 				Optional:    true,
-				ForceNew:    true,
 			},
 			"envs": {
 				Description: "Terraform Envrionment Variables",
 				Type:        schema.TypeMap,
 				Optional:    true,
-				ForceNew:    true,
 			},
 			"registry":   schemaRegistry(),
 			"extra_file": schemaFile(),
 
-			"result": {
+			"output": {
 				Description: "Terraform output",
 				Type:        schema.TypeMap,
 				Computed:    true,
-				Sensitive:   true,
+				// Sensitive:   true,
 			},
 		},
 	}
@@ -79,7 +77,6 @@ func schemaFile() *schema.Schema {
 	return &schema.Schema{
 		Type:        schema.TypeList,
 		Optional:    true,
-		ForceNew:    true,
 		Description: "Additional file for Terraform Module",
 		// MaxItems: 1,
 		Elem: &schema.Resource{
@@ -87,13 +84,11 @@ func schemaFile() *schema.Schema {
 				"path": {
 					Type:        schema.TypeString,
 					Required:    true,
-					ForceNew:    true,
 					Description: "Relative file path in Terraform module",
 				},
 				"content": {
 					Type:        schema.TypeString,
 					Required:    true,
-					ForceNew:    true,
 					Description: "File content",
 				},
 			},
@@ -105,7 +100,6 @@ func schemaRegistry() *schema.Schema {
 	return &schema.Schema{
 		Type:     schema.TypeList,
 		Optional: true,
-		ForceNew: true,
 		// MaxItems: 1,
 		Elem: &schema.Resource{
 			Schema: map[string]*schema.Schema{
@@ -113,13 +107,11 @@ func schemaRegistry() *schema.Schema {
 				"host": {
 					Type:        schema.TypeString,
 					Required:    true,
-					ForceNew:    true,
 					Description: "Terraform Registry Host",
 				},
 				"token": {
 					Type:        schema.TypeString,
 					Required:    true,
-					ForceNew:    true,
 					Sensitive:   true,
 					Description: "Terraform Registry access token",
 				},
@@ -163,15 +155,13 @@ func writeFiles(ctx context.Context, dir string, files ...ExtraFile) error {
 	return nil
 }
 
-func resourceApplyCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	// use the meta value to retrieve your client from the provider configure method
-	client := meta.(*apiClient)
-	// client.
+type runner func(ctx context.Context, cli tfcli.Terraform) error
 
+func run(ctx context.Context, d *schema.ResourceData, meta interface{}, runner runner) diag.Diagnostics {
+	client := meta.(*apiClient)
 	source := d.Get("source").(string)
 	version := d.Get("version").(string)
 	terraform_version := d.Get("terraform_version").(string)
-
 	id := source + ":" + version
 	d.SetId(id)
 
@@ -200,8 +190,44 @@ func resourceApplyCreate(ctx context.Context, d *schema.ResourceData, meta inter
 	defer os.RemoveAll(dir)
 
 	tflog.Debug(ctx, "Terraform working dir: "+dir)
-	var buf bytes.Buffer
-	cli := tfcli.New(bin, dir, &buf, &buf)
+
+	stdRead, stdout := io.Pipe()
+	errRead, stderr := io.Pipe()
+	defer stdout.Close()
+	defer stderr.Close()
+	errorBuffer := &bytes.Buffer{}
+	cli := tfcli.New(bin, dir, stdout, stderr)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		scanner := bufio.NewScanner(stdRead)
+		// for {
+		for scanner.Scan() {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				tflog.Info(ctx, scanner.Text())
+			}
+
+		}
+	}()
+
+	go func() {
+		scanner := bufio.NewScanner(errRead)
+		// for {
+		for scanner.Scan() {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				txt := scanner.Text()
+				tflog.Info(ctx, txt)
+				errorBuffer.WriteString(txt)
+			}
+
+		}
+	}()
 
 	vars := d.Get("vars").(map[string]interface{})
 	if vars != nil {
@@ -223,65 +249,71 @@ func resourceApplyCreate(ctx context.Context, d *schema.ResourceData, meta inter
 
 	creds := registryCreds(ctx, d)
 	creds = append(creds, client.registry...)
-	tflog.Debug(ctx, "With reg: "+fmt.Sprintf("%+v", creds))
+	tflog.Debug(ctx, "With regestry credentials: "+fmt.Sprintf("%+v", creds))
 	cli.WithRegistry(creds)
 
 	tflog.Debug(ctx, "Download Terrform Module "+fmt.Sprintf("%s:%s", source, version))
 	err = cli.GetModule(source, version)
 	if err != nil {
-		tflog.Error(ctx, buf.String())
-		return diag.FromErr(err)
+		return diag.FromErr(fmt.Errorf("%s\nError: %s", errorBuffer.String(), err.Error()))
 	}
 
 	extraFiles := parseExtraFiles(ctx, d)
 	extraFiles = append(extraFiles, client.extraFiles...)
 	err = writeFiles(ctx, cli.Dir(), extraFiles...)
 	if err != nil {
-		tflog.Error(ctx, buf.String())
-		return diag.FromErr(err)
+		return diag.FromErr(fmt.Errorf("%s\nError: %s", errorBuffer.String(), err.Error()))
 	}
 
-	tflog.Debug(ctx, "Terrform Init")
+	tflog.Info(ctx, "Terrform Init")
 	err = cli.Init()
 	if err != nil {
-		tflog.Error(ctx, buf.String())
-		return diag.FromErr(err)
-	}
-	tflog.Debug(ctx, "Terrform Apply")
-	err = cli.Apply()
-	if err != nil {
-		tflog.Error(ctx, buf.String())
-		return diag.FromErr(err)
+		return diag.FromErr(fmt.Errorf("%s\nTerraform init failed: %s", errorBuffer.String(), err.Error()))
+
 	}
 
-	result, err := cli.Output()
+	err = runner(ctx, cli)
 	if err != nil {
-		tflog.Error(ctx, buf.String())
-		return diag.FromErr(err)
+		return diag.FromErr(fmt.Errorf("%s\n Error: %s", errorBuffer.String(), err.Error()))
 	}
-	d.Set("result", result)
-	return nil
+	return diag.Diagnostics{}
+}
+
+func resourceApplyCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
+	return run(ctx, d, meta, func(ctx context.Context, cli tfcli.Terraform) error {
+		tflog.Debug(ctx, "Terrform Apply")
+		err := cli.Apply()
+		if err != nil {
+			return fmt.Errorf("terraform apply failed: %s", err.Error())
+		}
+		result, err := cli.Output()
+		if err != nil {
+			return fmt.Errorf("cannot get Terraform output: %s", err.Error())
+
+		}
+		d.Set("output", result)
+		return nil
+	})
 }
 
 func resourceApplyRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	// use the meta value to retrieve your client from the provider configure method
-	// client := meta.(*apiClient)
-	// return diag.Errorf("not implemented")
+	// TODO?
 	return nil
 }
 
 func resourceApplyUpdate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	// use the meta value to retrieve your client from the provider configure method
-	// client := meta.(*apiClient)
-
-	// return diag.Errorf("not implemented")
-	return nil
+	return resourceApplyCreate(ctx, d, meta)
 }
 
 func resourceApplyDelete(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	// use the meta value to retrieve your client from the provider configure method
-	// client := meta.(*apiClient)
-	// return diag.Errorf("not implemented")
-	d.SetId("")
-	return nil
+	return run(ctx, d, meta, func(ctx context.Context, cli tfcli.Terraform) error {
+		tflog.Debug(ctx, "Terrform Destroy")
+		err := cli.Destroy()
+		if err != nil {
+			return fmt.Errorf("terraform destroy failed: %s", err.Error())
+		}
+		d.SetId("")
+		return nil
+	})
+
 }

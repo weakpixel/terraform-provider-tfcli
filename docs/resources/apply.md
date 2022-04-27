@@ -32,7 +32,7 @@ Applies the configured Terraform Module
 
 ### Read-Only
 
-- `result` (Map of String, Sensitive) Terraform output
+- `output` (Map of String) Terraform output
 
 <a id="nestedblock--extra_file"></a>
 ### Nested Schema for `extra_file`

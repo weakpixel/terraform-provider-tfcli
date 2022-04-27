@@ -2,7 +2,7 @@ terraform {
   required_providers {
     tfcli = {
       source  = "weakpixel/tfcli"
-      version = "0.0.5"
+      version = "0.0.6"
     }
   }
 }
@@ -21,9 +21,7 @@ provider "tfcli" {
                 backend "local" { }
             }
         EOM
-
   }
-
 }
 
 resource "tfcli_apply" "hello" {
@@ -67,11 +65,9 @@ resource "tfcli_apply" "hello_world" {
 }
 
 output "result_string_var" {
-  value     = tfcli_apply.hello_world.result["string_var"]
-  sensitive = true
+  value     = tfcli_apply.hello_world.output["string_var"]
 }
 
 output "result" {
-  value     = tfcli_apply.hello_world.result
-  sensitive = true
+  value     = tfcli_apply.hello_world.output
 }
