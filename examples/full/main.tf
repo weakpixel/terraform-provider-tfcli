@@ -65,9 +65,9 @@ resource "tfcli_apply" "hello_world" {
 }
 
 output "result_string_var" {
-  value     = tfcli_apply.hello_world.output["string_var"]
+  value = tfcli_apply.hello_world.output["string_var"]
 }
 
 output "result" {
-  value     = tfcli_apply.hello_world.output
+  value = tfcli_apply.hello_world.output
 }
