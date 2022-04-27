@@ -3,8 +3,11 @@ package provider
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io/ioutil"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
@@ -17,10 +20,10 @@ func resourceApply() *schema.Resource {
 		// This description is used by the documentation generator and the language server.
 		Description: "Applies the configured Terraform Module",
 
-		CreateContext: resourceScaffoldingCreate,
-		ReadContext:   resourceScaffoldingRead,
-		UpdateContext: resourceScaffoldingUpdate,
-		DeleteContext: resourceScaffoldingDelete,
+		CreateContext: resourceApplyCreate,
+		ReadContext:   resourceApplyRead,
+		UpdateContext: resourceApplyUpdate,
+		DeleteContext: resourceApplyDelete,
 
 		Schema: map[string]*schema.Schema{
 			"terraform_version": {
@@ -63,6 +66,14 @@ func resourceApply() *schema.Resource {
 				Optional:    true,
 			},
 			"registry": schemaRegistry(),
+
+			"result": {
+				// This description is used by the documentation generator and the language server.
+				Description: "Terraform output",
+				Type:        schema.TypeMap,
+				Computed:    true,
+				Sensitive:   true,
+			},
 		},
 	}
 }
@@ -93,7 +104,23 @@ func schemaRegistry() *schema.Schema {
 	}
 }
 
-func resourceScaffoldingCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
+func lookupTerraform() (string, error) {
+	path, err := exec.LookPath("terraform")
+	if err != nil {
+		return "", fmt.Errorf("cannot find terraform executable in PATH")
+	}
+	return path, nil
+}
+
+func toStringMap(m map[string]interface{}) map[string]string {
+	result := map[string]string{}
+	for k, v := range m {
+		result[k] = fmt.Sprint(v)
+	}
+	return result
+}
+
+func resourceApplyCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	// use the meta value to retrieve your client from the provider configure method
 	// client := meta.(*apiClient)
 
@@ -104,39 +131,50 @@ func resourceScaffoldingCreate(ctx context.Context, d *schema.ResourceData, meta
 	id := source + ":" + version
 	d.SetId(id)
 
-	tflog.Trace(ctx, "Download Terraform")
-
+	bin := ""
+	var err error
 	if terraform_version == "" {
-		// TODO: Use installed terraform if terraform_version is not defined
-		terraform_version = "1.1.19"
+		tflog.Debug(ctx, "Lookup Terraform executable")
+		bin, err = lookupTerraform()
+		if err != nil {
+			return diag.FromErr(err)
+		}
+	} else {
+		tflog.Debug(ctx, "Download Terraform: "+terraform_version)
+		bin, err = tfcli.DownloadTerraform(terraform_version, false)
+		if err != nil {
+			return diag.FromErr(err)
+		}
 	}
 
-	bin, err := tfcli.DownloadTerraform(terraform_version, false)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	dir, err := ioutil.TempDir("", source)
+	tflog.Debug(ctx, "Terraform Bin: "+bin)
+
+	dir, err := ioutil.TempDir("", strings.ReplaceAll(source, "/", "_"))
 	if err != nil {
 		return diag.FromErr(err)
 	}
 	defer os.RemoveAll(dir)
 
+	tflog.Debug(ctx, "Terraform working dir: "+dir)
 	var buf bytes.Buffer
 	cli := tfcli.New(bin, dir, &buf, &buf)
 
-	vars := d.Get("vars").(map[string]string)
+	vars := d.Get("vars").(map[string]interface{})
 	if vars != nil {
-		cli.WithVars(vars)
+		tflog.Debug(ctx, "With vars: "+fmt.Sprintf("%+v", vars))
+		cli.WithVars(toStringMap(vars))
 	}
 
-	backend_vars := d.Get("backend_vars").(map[string]string)
+	backend_vars := d.Get("backend_vars").(map[string]interface{})
 	if backend_vars != nil {
-		cli.WithBackendVars(vars)
+		tflog.Debug(ctx, "With backend vars: "+fmt.Sprintf("%+v", backend_vars))
+		cli.WithBackendVars(toStringMap(vars))
 	}
 
-	envs := d.Get("envs").(map[string]string)
+	envs := d.Get("envs").(map[string]interface{})
 	if envs != nil {
-		cli.WithEnv(envs)
+		tflog.Debug(ctx, "With envs: "+fmt.Sprintf("%+v", envs))
+		cli.WithEnv(toStringMap(envs))
 	}
 
 	registry := d.Get("registry").([]interface{})
@@ -149,41 +187,58 @@ func resourceScaffoldingCreate(ctx context.Context, d *schema.ResourceData, meta
 				Token: raw["token"].(string),
 			})
 		}
+
+		tflog.Debug(ctx, "With reg: "+fmt.Sprintf("%+v", creds))
 		cli.WithRegistry(creds)
 	}
 
+	tflog.Debug(ctx, "Download Terrform Module "+fmt.Sprintf("%s:%s", source, version))
 	err = cli.GetModule(source, version)
 	if err != nil {
+		tflog.Error(ctx, buf.String())
 		return diag.FromErr(err)
 	}
+
+	tflog.Debug(ctx, "Terrform Init")
 	err = cli.Init()
 	if err != nil {
+		tflog.Error(ctx, buf.String())
 		return diag.FromErr(err)
 	}
+	tflog.Debug(ctx, "Terrform Apply")
 	err = cli.Apply()
 	if err != nil {
+		tflog.Error(ctx, buf.String())
 		return diag.FromErr(err)
 	}
-	return diag.Errorf("not implemented")
+
+	result, err := cli.Output()
+	if err != nil {
+		tflog.Error(ctx, buf.String())
+		return diag.FromErr(err)
+	}
+	d.Set("result", result)
+	return nil
 }
 
-func resourceScaffoldingRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
+func resourceApplyRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
+	// use the meta value to retrieve your client from the provider configure method
+	// client := meta.(*apiClient)
+	// return diag.Errorf("not implemented")
+	return nil
+}
+
+func resourceApplyUpdate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	// use the meta value to retrieve your client from the provider configure method
 	// client := meta.(*apiClient)
 
-	return diag.Errorf("not implemented")
+	// return diag.Errorf("not implemented")
+	return nil
 }
 
-func resourceScaffoldingUpdate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
+func resourceApplyDelete(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	// use the meta value to retrieve your client from the provider configure method
 	// client := meta.(*apiClient)
-
-	return diag.Errorf("not implemented")
-}
-
-func resourceScaffoldingDelete(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	// use the meta value to retrieve your client from the provider configure method
-	// client := meta.(*apiClient)
-
-	return diag.Errorf("not implemented")
+	// return diag.Errorf("not implemented")
+	return nil
 }
