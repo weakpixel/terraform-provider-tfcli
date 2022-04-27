@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
@@ -17,7 +18,6 @@ import (
 
 func resourceApply() *schema.Resource {
 	return &schema.Resource{
-		// This description is used by the documentation generator and the language server.
 		Description: "Applies the configured Terraform Module",
 
 		CreateContext: resourceApplyCreate,
@@ -27,48 +27,45 @@ func resourceApply() *schema.Resource {
 
 		Schema: map[string]*schema.Schema{
 			"terraform_version": {
-				// This description is used by the documentation generator and the language server.
 				Description: "Terraform Version",
 				Type:        schema.TypeString,
 				Optional:    true,
 			},
 
 			"source": {
-				// This description is used by the documentation generator and the language server.
 				Description: "Terraform Module Source",
 				Type:        schema.TypeString,
-				// Optional:    false,
-				Required: true,
+				Required:    true,
+				ForceNew:    true,
 			},
 			"version": {
-				// This description is used by the documentation generator and the language server.
 				Description: "Terraform Module Version",
 				Type:        schema.TypeString,
-				// Optional:    false,
-				Required: true,
+				Required:    true,
+				ForceNew:    true,
 			},
 			"vars": {
-				// This description is used by the documentation generator and the language server.
 				Description: "Terraform module variables",
 				Type:        schema.TypeMap,
 				Optional:    true,
+				ForceNew:    true,
 			},
-			"backend_vars": {
-				// This description is used by the documentation generator and the language server.
+			"backend_config": {
 				Description: "Terraform module backend variables",
 				Type:        schema.TypeMap,
 				Optional:    true,
+				ForceNew:    true,
 			},
 			"envs": {
-				// This description is used by the documentation generator and the language server.
 				Description: "Terraform Envrionment Variables",
 				Type:        schema.TypeMap,
 				Optional:    true,
+				ForceNew:    true,
 			},
 			"registry": schemaRegistry(),
+			"file":     schemaFile(),
 
 			"result": {
-				// This description is used by the documentation generator and the language server.
 				Description: "Terraform output",
 				Type:        schema.TypeMap,
 				Computed:    true,
@@ -78,10 +75,37 @@ func resourceApply() *schema.Resource {
 	}
 }
 
+func schemaFile() *schema.Schema {
+	return &schema.Schema{
+		Type:        schema.TypeList,
+		Optional:    true,
+		ForceNew:    true,
+		Description: "Additional file for Terraform Module",
+		// MaxItems: 1,
+		Elem: &schema.Resource{
+			Schema: map[string]*schema.Schema{
+				"path": {
+					Type:        schema.TypeString,
+					Required:    true,
+					ForceNew:    true,
+					Description: "Relative file path in Terraform module",
+				},
+				"content": {
+					Type:        schema.TypeString,
+					Required:    true,
+					ForceNew:    true,
+					Description: "File content",
+				},
+			},
+		},
+	}
+}
+
 func schemaRegistry() *schema.Schema {
 	return &schema.Schema{
 		Type:     schema.TypeList,
 		Optional: true,
+		ForceNew: true,
 		// MaxItems: 1,
 		Elem: &schema.Resource{
 			Schema: map[string]*schema.Schema{
@@ -118,6 +142,30 @@ func toStringMap(m map[string]interface{}) map[string]string {
 		result[k] = fmt.Sprint(v)
 	}
 	return result
+}
+
+func writeFiles(ctx context.Context, d *schema.ResourceData, dir string) error {
+	files := d.Get("file").([]interface{})
+
+	for _, e := range files {
+		raw := e.(map[string]interface{})
+		content := raw["content"].(string)
+		path := raw["path"].(string)
+		fullpath := filepath.Join(dir, filepath.FromSlash(path))
+		// ospath := filepath.FromSlash(path)
+		targetdir := filepath.Dir(filepath.Dir(fullpath))
+		tflog.Debug(ctx, "Write file: "+fullpath)
+		err := os.MkdirAll(targetdir, 0777)
+		if err != nil {
+			return err
+		}
+		err = ioutil.WriteFile(fullpath, []byte(content), 0660)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func resourceApplyCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
@@ -165,10 +213,10 @@ func resourceApplyCreate(ctx context.Context, d *schema.ResourceData, meta inter
 		cli.WithVars(toStringMap(vars))
 	}
 
-	backend_vars := d.Get("backend_vars").(map[string]interface{})
-	if backend_vars != nil {
-		tflog.Debug(ctx, "With backend vars: "+fmt.Sprintf("%+v", backend_vars))
-		cli.WithBackendVars(toStringMap(vars))
+	backend_config := d.Get("backend_config").(map[string]interface{})
+	if backend_config != nil {
+		tflog.Debug(ctx, "With backend config: "+fmt.Sprintf("%+v", backend_config))
+		cli.WithBackendVars(toStringMap(backend_config))
 	}
 
 	envs := d.Get("envs").(map[string]interface{})
@@ -194,6 +242,12 @@ func resourceApplyCreate(ctx context.Context, d *schema.ResourceData, meta inter
 
 	tflog.Debug(ctx, "Download Terrform Module "+fmt.Sprintf("%s:%s", source, version))
 	err = cli.GetModule(source, version)
+	if err != nil {
+		tflog.Error(ctx, buf.String())
+		return diag.FromErr(err)
+	}
+
+	err = writeFiles(ctx, d, cli.Dir())
 	if err != nil {
 		tflog.Error(ctx, buf.String())
 		return diag.FromErr(err)
@@ -240,5 +294,6 @@ func resourceApplyDelete(ctx context.Context, d *schema.ResourceData, meta inter
 	// use the meta value to retrieve your client from the provider configure method
 	// client := meta.(*apiClient)
 	// return diag.Errorf("not implemented")
+	d.SetId("")
 	return nil
 }
