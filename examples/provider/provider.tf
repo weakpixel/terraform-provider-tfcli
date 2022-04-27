@@ -1,3 +1,3 @@
-provider "scaffolding" {
+provider "tfcli" {
   # example configuration here
 }

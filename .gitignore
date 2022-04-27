@@ -1,4 +1,5 @@
 *.dll
+main
 *.exe
 .DS_Store
 example.tf

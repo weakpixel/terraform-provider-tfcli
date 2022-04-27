@@ -1,3 +1,3 @@
-data "scaffolding_data_source" "example" {
-  sample_attribute = "foo"
+data "tfcli_apply" "example" {
+  // sample_attribute = "foo"
 }

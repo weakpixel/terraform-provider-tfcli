@@ -1,3 +1,3 @@
-resource "scaffolding_resource" "example" {
-  sample_attribute = "foo"
+resource "tfcli_apply" "example" {
+  // sample_attribute = "foo"
 }
