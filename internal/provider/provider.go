@@ -5,6 +5,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/weakpixel/tfcli"
 )
 
 func init() {
@@ -32,6 +33,10 @@ func New(version string) func() *schema.Provider {
 			ResourcesMap: map[string]*schema.Resource{
 				"tfcli_apply": resourceApply(),
 			},
+			Schema: map[string]*schema.Schema{
+				"registry":   schemaRegistry(),
+				"extra_file": schemaFile(),
+			},
 		}
 
 		p.ConfigureContextFunc = configure(version, p)
@@ -41,17 +46,53 @@ func New(version string) func() *schema.Provider {
 }
 
 type apiClient struct {
-	// Add whatever fields, client or connection info, etc. here
-	// you would need to setup to communicate with the upstream
-	// API.
+	registry   []tfcli.RegistryCredential
+	extraFiles []ExtraFile
 }
 
 func configure(version string, p *schema.Provider) func(context.Context, *schema.ResourceData) (interface{}, diag.Diagnostics) {
-	return func(context.Context, *schema.ResourceData) (interface{}, diag.Diagnostics) {
+	return func(ctx context.Context, d *schema.ResourceData) (interface{}, diag.Diagnostics) {
 		// Setup a User-Agent for your API client (replace the provider name for yours):
 		// userAgent := p.UserAgent("terraform-provider-scaffolding", version)
 		// TODO: myClient.UserAgent = userAgent
-
-		return &apiClient{}, nil
+		return &apiClient{
+			registry:   registryCreds(ctx, d),
+			extraFiles: parseExtraFiles(ctx, d),
+		}, nil
 	}
+}
+
+func registryCreds(ctx context.Context, d *schema.ResourceData) []tfcli.RegistryCredential {
+	registry := d.Get("registry").([]interface{})
+	creds := []tfcli.RegistryCredential{}
+	if registry != nil {
+
+		for _, e := range registry {
+			raw := e.(map[string]interface{})
+			creds = append(creds, tfcli.RegistryCredential{
+				Type:  raw["host"].(string),
+				Token: raw["token"].(string),
+			})
+		}
+	}
+	return creds
+}
+
+func parseExtraFiles(ctx context.Context, d *schema.ResourceData) []ExtraFile {
+	files := d.Get("extra_file").([]interface{})
+	result := []ExtraFile{}
+	for _, e := range files {
+		raw := e.(map[string]interface{})
+		result = append(result, ExtraFile{
+			path:    raw["path"].(string),
+			content: []byte(raw["content"].(string)),
+		})
+	}
+
+	return result
+}
+
+type ExtraFile struct {
+	content []byte
+	path    string
 }

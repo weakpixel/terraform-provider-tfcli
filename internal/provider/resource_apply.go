@@ -62,8 +62,8 @@ func resourceApply() *schema.Resource {
 				Optional:    true,
 				ForceNew:    true,
 			},
-			"registry": schemaRegistry(),
-			"file":     schemaFile(),
+			"registry":   schemaRegistry(),
+			"extra_file": schemaFile(),
 
 			"result": {
 				Description: "Terraform output",
@@ -144,14 +144,9 @@ func toStringMap(m map[string]interface{}) map[string]string {
 	return result
 }
 
-func writeFiles(ctx context.Context, d *schema.ResourceData, dir string) error {
-	files := d.Get("file").([]interface{})
-
-	for _, e := range files {
-		raw := e.(map[string]interface{})
-		content := raw["content"].(string)
-		path := raw["path"].(string)
-		fullpath := filepath.Join(dir, filepath.FromSlash(path))
+func writeFiles(ctx context.Context, dir string, files ...ExtraFile) error {
+	for _, f := range files {
+		fullpath := filepath.Join(dir, filepath.FromSlash(f.path))
 		// ospath := filepath.FromSlash(path)
 		targetdir := filepath.Dir(filepath.Dir(fullpath))
 		tflog.Debug(ctx, "Write file: "+fullpath)
@@ -159,7 +154,7 @@ func writeFiles(ctx context.Context, d *schema.ResourceData, dir string) error {
 		if err != nil {
 			return err
 		}
-		err = ioutil.WriteFile(fullpath, []byte(content), 0660)
+		err = ioutil.WriteFile(fullpath, f.content, 0660)
 		if err != nil {
 			return err
 		}
@@ -170,7 +165,8 @@ func writeFiles(ctx context.Context, d *schema.ResourceData, dir string) error {
 
 func resourceApplyCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	// use the meta value to retrieve your client from the provider configure method
-	// client := meta.(*apiClient)
+	client := meta.(*apiClient)
+	// client.
 
 	source := d.Get("source").(string)
 	version := d.Get("version").(string)
@@ -225,20 +221,10 @@ func resourceApplyCreate(ctx context.Context, d *schema.ResourceData, meta inter
 		cli.WithEnv(toStringMap(envs))
 	}
 
-	registry := d.Get("registry").([]interface{})
-	if registry != nil {
-		creds := []tfcli.RegistryCredential{}
-		for _, e := range registry {
-			raw := e.(map[string]interface{})
-			creds = append(creds, tfcli.RegistryCredential{
-				Type:  raw["host"].(string),
-				Token: raw["token"].(string),
-			})
-		}
-
-		tflog.Debug(ctx, "With reg: "+fmt.Sprintf("%+v", creds))
-		cli.WithRegistry(creds)
-	}
+	creds := registryCreds(ctx, d)
+	creds = append(creds, client.registry...)
+	tflog.Debug(ctx, "With reg: "+fmt.Sprintf("%+v", creds))
+	cli.WithRegistry(creds)
 
 	tflog.Debug(ctx, "Download Terrform Module "+fmt.Sprintf("%s:%s", source, version))
 	err = cli.GetModule(source, version)
@@ -247,7 +233,9 @@ func resourceApplyCreate(ctx context.Context, d *schema.ResourceData, meta inter
 		return diag.FromErr(err)
 	}
 
-	err = writeFiles(ctx, d, cli.Dir())
+	extraFiles := parseExtraFiles(ctx, d)
+	extraFiles = append(extraFiles, client.extraFiles...)
+	err = writeFiles(ctx, cli.Dir(), extraFiles...)
 	if err != nil {
 		tflog.Error(ctx, buf.String())
 		return diag.FromErr(err)

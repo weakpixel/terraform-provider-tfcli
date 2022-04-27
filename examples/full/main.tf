@@ -2,12 +2,27 @@ terraform {
   required_providers {
     tfcli = {
       source  = "weakpixel/tfcli"
-      version = "0.0.4"
+      version = "0.0.5"
     }
   }
 }
 
 provider "tfcli" {
+  // Configure access to a private registry
+  registry {
+    host  = "private-registry.io"
+    token = "asdf123"
+  }
+  // extra file for all terraform executions
+  extra_file {
+    path    = "backend.tf"
+    content = <<EOM
+            terraform { 
+                backend "local" { }
+            }
+        EOM
+
+  }
 
 }
 
@@ -22,16 +37,15 @@ resource "tfcli_apply" "hello" {
     "path" : "/tmp/terraform-hello.tfstate"
   }
 
-  // Add custom files to modify TF execution for specific backends
-  file {
-    path    = "backend.tf"
+  extra_file {
+    path    = "some-other-resource.tf"
     content = <<EOM
-        terraform { 
-           backend "local" {
-           }
+        resource "null_resource" "example1" {
+            provisioner "local-exec" {
+                command = "echo hello"
+            }
         }
       EOM
-
   }
 }
 
@@ -41,7 +55,6 @@ resource "tfcli_apply" "world" {
   envs = {
     "TF_VAR_string_var" = "World"
   }
-
 }
 
 resource "tfcli_apply" "hello_world" {

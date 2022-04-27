@@ -24,7 +24,7 @@ Applies the configured Terraform Module
 
 - `backend_config` (Map of String) Terraform module backend variables
 - `envs` (Map of String) Terraform Envrionment Variables
-- `file` (Block List) Additional file for Terraform Module (see [below for nested schema](#nestedblock--file))
+- `extra_file` (Block List) Additional file for Terraform Module (see [below for nested schema](#nestedblock--extra_file))
 - `id` (String) The ID of this resource.
 - `registry` (Block List) (see [below for nested schema](#nestedblock--registry))
 - `terraform_version` (String) Terraform Version
@@ -34,8 +34,8 @@ Applies the configured Terraform Module
 
 - `result` (Map of String, Sensitive) Terraform output
 
-<a id="nestedblock--file"></a>
-### Nested Schema for `file`
+<a id="nestedblock--extra_file"></a>
+### Nested Schema for `extra_file`
 
 Required:
 
