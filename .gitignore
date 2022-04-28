@@ -1,5 +1,4 @@
 *.dll
-docs
 tmp
 terraform-provider-tfcli
 main
