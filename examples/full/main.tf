@@ -2,7 +2,7 @@ terraform {
   required_providers {
     tfcli = {
       source  = "weakpixel/tfcli"
-      version = "0.0.6"
+      version = "0.0.8"
     }
   }
 }
@@ -59,7 +59,7 @@ resource "tfcli_apply" "hello_world" {
   source  = "weakpixel/test-module/tfcli"
   version = "0.0.2"
   vars = {
-    "string_var" = format("%s %s", tfcli_apply.hello.result["string_var"], tfcli_apply.world.result["string_var"])
+    "string_var" = format("%s %s", tfcli_apply.hello.output["string_var"], tfcli_apply.world.output["string_var"])
   }
 
 }
