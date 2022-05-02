@@ -5,6 +5,8 @@ The provider can either look up the Terraform executable from the PATH environme
 
 Note: The provider is tested on OSX and linux. I do not know if it works on Window, feedback is welcome.
 
+The provider is available in the [Terraform Registry](https://registry.terraform.io/providers/weakpixel/tfcli/0.0.8)
+
 ## Requirements
 
 -	[Terraform](https://www.terraform.io/downloads.html) >= 0.13.x
