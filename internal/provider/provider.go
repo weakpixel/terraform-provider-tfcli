@@ -52,9 +52,6 @@ type apiClient struct {
 
 func configure(version string, p *schema.Provider) func(context.Context, *schema.ResourceData) (interface{}, diag.Diagnostics) {
 	return func(ctx context.Context, d *schema.ResourceData) (interface{}, diag.Diagnostics) {
-		// Setup a User-Agent for your API client (replace the provider name for yours):
-		// userAgent := p.UserAgent("terraform-provider-scaffolding", version)
-		// TODO: myClient.UserAgent = userAgent
 		return &apiClient{
 			registry:   registryCreds(ctx, d),
 			extraFiles: parseExtraFiles(ctx, d),
@@ -65,15 +62,12 @@ func configure(version string, p *schema.Provider) func(context.Context, *schema
 func registryCreds(ctx context.Context, d *schema.ResourceData) []tfcli.RegistryCredential {
 	registry := d.Get("registry").([]interface{})
 	creds := []tfcli.RegistryCredential{}
-	if registry != nil {
-
-		for _, e := range registry {
-			raw := e.(map[string]interface{})
-			creds = append(creds, tfcli.RegistryCredential{
-				Type:  raw["host"].(string),
-				Token: raw["token"].(string),
-			})
-		}
+	for _, e := range registry {
+		raw := e.(map[string]interface{})
+		creds = append(creds, tfcli.RegistryCredential{
+			Type:  raw["host"].(string),
+			Token: raw["token"].(string),
+		})
 	}
 	return creds
 }
@@ -88,7 +82,6 @@ func parseExtraFiles(ctx context.Context, d *schema.ResourceData) []ExtraFile {
 			content: []byte(raw["content"].(string)),
 		})
 	}
-
 	return result
 }
 
