@@ -1,10 +1,10 @@
-page_title: "Terraform-in-Terraform (TiT) Provider"
+page_title: "Terraform-in-Terraform (tfcli) Provider"
 subcategory: ""
 description: |-
 This provider allows running Terraform in Terraform. This might seem insane but there are some edge cases where it comes in handy.
 ---
 
-# Terraform-in-Terraform (TiT) Provider
+# Terraform-in-Terraform (tfcli) Provider
 
 ```terraform
 terraform {
