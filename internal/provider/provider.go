@@ -82,6 +82,8 @@ func parseExtraFiles(ctx context.Context, d *schema.ResourceData) []ExtraFile {
 		result = append(result, ExtraFile{
 			path:    raw["path"].(string),
 			content: []byte(raw["content"].(string)),
+			force:   raw["force"].(bool),
+			cleanup: raw["cleanup"].(bool),
 		})
 	}
 	return result
@@ -90,4 +92,6 @@ func parseExtraFiles(ctx context.Context, d *schema.ResourceData) []ExtraFile {
 type ExtraFile struct {
 	content []byte
 	path    string
+	force   bool
+	cleanup bool
 }

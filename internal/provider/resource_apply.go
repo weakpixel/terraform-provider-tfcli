@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -35,15 +36,19 @@ func resourceApply() *schema.Resource {
 			},
 
 			"source": {
-				Description: "Terraform Module Source",
+				Description: "Terraform Module Source. Not required if 'module_path' is set",
 				Type:        schema.TypeString,
-				Required:    true,
-				ForceNew:    true,
+				Optional:    true,
 			},
 			"version": {
-				Description: "Terraform Module Version",
+				Description: "Terraform Module Version. Not required if 'module_path' is set",
 				Type:        schema.TypeString,
-				Required:    true,
+				Optional:    true,
+			},
+			"module_path": {
+				Description: "Path to a local terraform module. Alternative to 'source' and 'version' ",
+				Type:        schema.TypeString,
+				Optional:    true,
 			},
 			"vars": {
 				Description: "Terraform module variables",
@@ -91,6 +96,16 @@ func schemaFile() *schema.Schema {
 					Required:    true,
 					Description: "File content",
 				},
+				"force": {
+					Type:        schema.TypeBool,
+					Optional:    true,
+					Description: "Set to true to overwrite existing file",
+				},
+				"cleanup": {
+					Type:        schema.TypeBool,
+					Optional:    true,
+					Description: "Set to true to delete file after execution",
+				},
 			},
 		},
 	}
@@ -136,7 +151,28 @@ func toStringMap(m map[string]interface{}) map[string]string {
 	return result
 }
 
+func cleanupFiles(ctx context.Context, dir string, files ...ExtraFile) {
+	for _, f := range files {
+		if f.cleanup {
+			fullpath := filepath.Join(dir, filepath.FromSlash(f.path))
+			os.Remove(fullpath)
+		}
+	}
+}
+
 func writeFiles(ctx context.Context, dir string, files ...ExtraFile) error {
+	for _, f := range files {
+		if f.force {
+			continue
+		}
+		fullpath := filepath.Join(dir, filepath.FromSlash(f.path))
+		if _, err := os.Stat(fullpath); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else {
+			return fmt.Errorf("cannot write extra file (%s) because target module has a file with the same name already. Use 'force' to overwrite file", f.path)
+		}
+	}
+
 	for _, f := range files {
 		fullpath := filepath.Join(dir, filepath.FromSlash(f.path))
 		// ospath := filepath.FromSlash(path)
@@ -157,39 +193,56 @@ func writeFiles(ctx context.Context, dir string, files ...ExtraFile) error {
 
 type runner func(ctx context.Context, cli tfcli.Terraform) error
 
-func run(ctx context.Context, d *schema.ResourceData, meta interface{}, runner runner) diag.Diagnostics {
-	client := meta.(*apiClient)
-	source := d.Get("source").(string)
-	version := d.Get("version").(string)
+func terraformBin(ctx context.Context, d *schema.ResourceData) (string, diag.Diagnostics) {
 	terraform_version := d.Get("terraform_version").(string)
-	id := source + ":" + version
-	d.SetId(id)
-
 	bin := ""
 	var err error
 	if terraform_version == "" {
 		tflog.Debug(ctx, "Lookup Terraform executable")
 		bin, err = lookupTerraform()
 		if err != nil {
-			return diag.FromErr(err)
+			return "", diag.FromErr(err)
 		}
 	} else {
 		tflog.Debug(ctx, "Download Terraform: "+terraform_version)
 		bin, err = tfcli.DownloadTerraform(terraform_version, false)
 		if err != nil {
-			return diag.FromErr(err)
+			return "", diag.FromErr(err)
 		}
 	}
-
 	tflog.Debug(ctx, "Terraform Bin: "+bin)
+	return bin, diag.Diagnostics{}
+}
 
-	dir, err := ioutil.TempDir("", strings.ReplaceAll(source, "/", "_"))
-	if err != nil {
-		return diag.FromErr(err)
+func run(ctx context.Context, d *schema.ResourceData, meta interface{}, runner runner) diag.Diagnostics {
+	client := meta.(*apiClient)
+	bin, diags := terraformBin(ctx, d)
+	if diags.HasError() {
+		return diags
 	}
-	defer os.RemoveAll(dir)
+	isLocalModule := d.Get("module_path") != ""
+	dir := ""
 
-	tflog.Debug(ctx, "Terraform working dir: "+dir)
+	if !isLocalModule {
+		// Prepare
+		source := d.Get("source").(string)
+		version := d.Get("version").(string)
+		if source == "" {
+			return diag.FromErr(fmt.Errorf("Please provider either 'source' or 'module_path'"))
+		}
+		id := source + ":" + version
+		d.SetId(id)
+		var err error
+		dir, err = ioutil.TempDir("", strings.ReplaceAll(source, "/", "_"))
+		if err != nil {
+			return diag.FromErr(err)
+		}
+		defer os.RemoveAll(dir)
+		tflog.Debug(ctx, "Terraform working dir: "+dir)
+	} else {
+		dir = d.Get("module_path").(string)
+		d.SetId(dir)
+	}
 
 	stdRead, stdout := io.Pipe()
 	errRead, stderr := io.Pipe()
@@ -252,15 +305,21 @@ func run(ctx context.Context, d *schema.ResourceData, meta interface{}, runner r
 	tflog.Debug(ctx, "With regestry credentials: "+fmt.Sprintf("%+v", creds))
 	cli.WithRegistry(creds)
 
-	tflog.Debug(ctx, "Download Terrform Module "+fmt.Sprintf("%s:%s", source, version))
-	err = cli.GetModule(source, version)
-	if err != nil {
-		return diag.FromErr(fmt.Errorf("%s\nError: %s", errorBuffer.String(), err.Error()))
+	if !isLocalModule {
+		source := d.Get("source").(string)
+		version := d.Get("version").(string)
+		tflog.Debug(ctx, "Download Terrform Module "+fmt.Sprintf("%s:%s", source, version))
+		err := cli.GetModule(source, version)
+		if err != nil {
+			return diag.FromErr(fmt.Errorf("%s\nError: %s", errorBuffer.String(), err.Error()))
+		}
 	}
 
 	extraFiles := parseExtraFiles(ctx, d)
 	extraFiles = append(extraFiles, client.extraFiles...)
-	err = writeFiles(ctx, cli.Dir(), extraFiles...)
+
+	defer cleanupFiles(ctx, cli.Dir(), extraFiles...)
+	err := writeFiles(ctx, cli.Dir(), extraFiles...)
 	if err != nil {
 		return diag.FromErr(fmt.Errorf("%s\nError: %s", errorBuffer.String(), err.Error()))
 	}
@@ -269,7 +328,6 @@ func run(ctx context.Context, d *schema.ResourceData, meta interface{}, runner r
 	err = cli.Init()
 	if err != nil {
 		return diag.FromErr(fmt.Errorf("%s\nTerraform init failed: %s", errorBuffer.String(), err.Error()))
-
 	}
 
 	err = runner(ctx, cli)

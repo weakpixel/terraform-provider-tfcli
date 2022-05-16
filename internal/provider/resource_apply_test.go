@@ -1,6 +1,8 @@
 package provider
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -9,6 +11,15 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/weakpixel/tfcli"
 )
+
+func prepareLocalTestModule(t *testing.T) string {
+	tmpDir := t.TempDir()
+	writeFiles(context.Background(), tmpDir, ExtraFile{
+		path:    "main.tf",
+		content: []byte(testModuleSrc),
+	})
+	return tmpDir
+}
 
 func TestAccResourceApply(t *testing.T) {
 	bin, err := tfcli.DownloadTerraform("1.1.9", false)
@@ -47,11 +58,27 @@ func TestAccResourceApply(t *testing.T) {
 						"tfcli_apply.test3", "output.testoutput", regexp.MustCompile("testoutput")),
 				),
 			},
+
+			{
+				Config: testAccResourceApplyExtraFileForce,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestMatchResourceAttr(
+						"tfcli_apply.test_force", "output.testoutput", regexp.MustCompile("testoutput")),
+				),
+			},
+
 			{
 				Config: testAccResourceApplyWithEnv,
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestMatchResourceAttr(
 						"tfcli_apply.test4", "output.string_var", regexp.MustCompile("HelloEnv")),
+				),
+			},
+			{
+				Config: fmt.Sprintf(testModulePath, prepareLocalTestModule(t)),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestMatchResourceAttr(
+						"tfcli_apply.test_module_path", "output.string_var", regexp.MustCompile("TestModule")),
 				),
 			},
 		},
@@ -88,6 +115,7 @@ resource "tfcli_apply" "test3" {
 	}
 	extra_file {
 		path    = "additional-output.tf"
+		cleanup = true
 		content = <<EOM
 			output "testoutput" {
 				value = "testoutput"
@@ -96,6 +124,7 @@ resource "tfcli_apply" "test3" {
 	}
 }
 `
+
 const testAccResourceApplyWithEnv = `
 resource "tfcli_apply" "test4" {
 	terraform_version = "1.0.0"
@@ -105,4 +134,42 @@ resource "tfcli_apply" "test4" {
 		"TF_VAR_string_var" = "HelloEnv"
 	  }
 }
+`
+
+const testModulePath = `
+resource "tfcli_apply" "test_module_path" {
+	terraform_version = "1.0.0"
+	module_path  = "%s"
+	envs = {
+		"TF_VAR_string_var" = "TestModule"
+	}
+}
+`
+
+const testAccResourceApplyExtraFileForce = `
+resource "tfcli_apply" "test_force" {
+	source  = "weakpixel/test-module/tfcli"
+  	version = "0.0.2"
+	extra_file {
+		path    = "main.tf"
+		cleanup = true
+		force 	= true
+		content = <<EOM
+			output "testoutput" {
+				value = "testoutput"
+			}
+		EOM
+	}
+}
+`
+
+const testModuleSrc = `
+	variable "string_var" {
+		description = "String variable"
+		type = string
+  	}
+  
+  	output "string_var" {
+		value = var.string_var
+  	}
 `
