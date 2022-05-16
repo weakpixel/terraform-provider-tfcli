@@ -249,7 +249,8 @@ func run(ctx context.Context, d *schema.ResourceData, meta interface{}, runner r
 	defer stdout.Close()
 	defer stderr.Close()
 	errorBuffer := &bytes.Buffer{}
-	cli := tfcli.New(bin, dir, stdout, stderr)
+	cli := tfcli.New(bin, dir).SetStdout(stdout).SetStderr(stderr)
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
@@ -302,8 +303,10 @@ func run(ctx context.Context, d *schema.ResourceData, meta interface{}, runner r
 
 	creds := registryCreds(ctx, d)
 	creds = append(creds, client.registry...)
-	tflog.Debug(ctx, "With regestry credentials: "+fmt.Sprintf("%+v", creds))
-	cli.WithRegistry(creds)
+	if len(creds) > 0 {
+		tflog.Debug(ctx, "With regestry credentials: "+fmt.Sprintf("%+v", creds))
+		cli.WithRegistry(creds)
+	}
 
 	if !isLocalModule {
 		source := d.Get("source").(string)
