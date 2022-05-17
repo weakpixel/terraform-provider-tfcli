@@ -151,6 +151,14 @@ func toStringMap(m map[string]interface{}) map[string]string {
 	return result
 }
 
+func toEnvStringMap(m map[string]interface{}) map[string]string {
+	result := map[string]string{}
+	for k, v := range m {
+		result["TF_VAR_"+k] = fmt.Sprint(v)
+	}
+	return result
+}
+
 func cleanupFiles(ctx context.Context, dir string, files ...ExtraFile) {
 	for _, f := range files {
 		if f.cleanup {
@@ -214,24 +222,25 @@ func terraformBin(ctx context.Context, d *schema.ResourceData) (string, diag.Dia
 	return bin, diag.Diagnostics{}
 }
 
-func run(ctx context.Context, d *schema.ResourceData, meta interface{}, runner runner) diag.Diagnostics {
+func run(ctx context.Context, d *schema.ResourceData, meta interface{}, varsAsEnv bool, runner runner) diag.Diagnostics {
 	client := meta.(*apiClient)
 	bin, diags := terraformBin(ctx, d)
 	if diags.HasError() {
 		return diags
 	}
 	isLocalModule := d.Get("module_path") != ""
-	dir := ""
 
+	dir := ""
+	id := ""
 	if !isLocalModule {
 		// Prepare
 		source := d.Get("source").(string)
 		version := d.Get("version").(string)
 		if source == "" {
-			return diag.FromErr(fmt.Errorf("Please provider either 'source' or 'module_path'"))
+			return diag.FromErr(fmt.Errorf("please provider either 'source' or 'module_path'"))
 		}
-		id := source + ":" + version
-		d.SetId(id)
+		id = source + ":" + version
+
 		var err error
 		dir, err = ioutil.TempDir("", strings.ReplaceAll(source, "/", "_"))
 		if err != nil {
@@ -241,7 +250,7 @@ func run(ctx context.Context, d *schema.ResourceData, meta interface{}, runner r
 		tflog.Debug(ctx, "Terraform working dir: "+dir)
 	} else {
 		dir = d.Get("module_path").(string)
-		d.SetId(dir)
+		id = dir
 	}
 
 	stdRead, stdout := io.Pipe()
@@ -283,12 +292,6 @@ func run(ctx context.Context, d *schema.ResourceData, meta interface{}, runner r
 		}
 	}()
 
-	vars := d.Get("vars").(map[string]interface{})
-	if vars != nil {
-		tflog.Debug(ctx, "With vars: "+fmt.Sprintf("%+v", vars))
-		cli.WithVars(toStringMap(vars))
-	}
-
 	backend_config := d.Get("backend_config").(map[string]interface{})
 	if backend_config != nil {
 		tflog.Debug(ctx, "With backend config: "+fmt.Sprintf("%+v", backend_config))
@@ -299,6 +302,18 @@ func run(ctx context.Context, d *schema.ResourceData, meta interface{}, runner r
 	if envs != nil {
 		tflog.Debug(ctx, "With envs: "+fmt.Sprintf("%+v", envs))
 		cli.WithEnv(toStringMap(envs))
+	}
+
+	vars := d.Get("vars").(map[string]interface{})
+	if vars != nil {
+		tflog.Debug(ctx, "With vars: "+fmt.Sprintf("%+v", vars))
+		if varsAsEnv {
+			// Destroy must not fail because a variable does not exists
+			// Providing variables as envrionment variable solves the issue.
+			cli.AppendEnv(toEnvStringMap(vars))
+		} else {
+			cli.WithVars(toStringMap(vars))
+		}
 	}
 
 	creds := registryCreds(ctx, d)
@@ -337,13 +352,22 @@ func run(ctx context.Context, d *schema.ResourceData, meta interface{}, runner r
 	if err != nil {
 		return diag.FromErr(fmt.Errorf("%s\n Error: %s", errorBuffer.String(), err.Error()))
 	}
+	d.SetId(id)
 	return diag.Diagnostics{}
 }
 
 func resourceApplyCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	return run(ctx, d, meta, func(ctx context.Context, cli tfcli.Terraform) error {
+	return run(ctx, d, meta, false, func(ctx context.Context, cli tfcli.Terraform) error {
+
+		tflog.Debug(ctx, "Terrform Plan")
+		planFile := filepath.Join(cli.Dir(), ".plan.json")
+		err := cli.Plan(planFile)
+		if err != nil {
+			return fmt.Errorf("terraform plan failed: %s", err.Error())
+		}
+
 		tflog.Debug(ctx, "Terrform Apply")
-		err := cli.Apply()
+		err = cli.ApplyWithPlan(planFile)
 		if err != nil {
 			return fmt.Errorf("terraform apply failed: %s", err.Error())
 		}
@@ -367,7 +391,7 @@ func resourceApplyUpdate(ctx context.Context, d *schema.ResourceData, meta inter
 }
 
 func resourceApplyDelete(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	return run(ctx, d, meta, func(ctx context.Context, cli tfcli.Terraform) error {
+	return run(ctx, d, meta, true, func(ctx context.Context, cli tfcli.Terraform) error {
 		tflog.Debug(ctx, "Terrform Destroy")
 		err := cli.Destroy()
 		if err != nil {
