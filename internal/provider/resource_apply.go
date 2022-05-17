@@ -361,6 +361,7 @@ func resourceApplyCreate(ctx context.Context, d *schema.ResourceData, meta inter
 
 		tflog.Debug(ctx, "Terrform Plan")
 		planFile := filepath.Join(cli.Dir(), ".plan.json")
+		defer os.Remove(planFile)
 		err := cli.Plan(planFile)
 		if err != nil {
 			return fmt.Errorf("terraform plan failed: %s", err.Error())
