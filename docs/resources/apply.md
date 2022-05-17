@@ -22,6 +22,7 @@ Applies the configured Terraform Module
 - `extra_file` (Block List) Additional file for Terraform Module (see [below for nested schema](#nestedblock--extra_file))
 - `module_path` (String) Path to a local terraform module. Alternative to 'source' and 'version'
 - `registry` (Block List) (see [below for nested schema](#nestedblock--registry))
+- `skip_destroy` (Boolean) Set to true to skip destroy Defaults to `false`.
 - `source` (String) Terraform Module Source. Not required if 'module_path' is set
 - `terraform_version` (String) Terraform Version
 - `vars` (Map of String) Terraform module variables
