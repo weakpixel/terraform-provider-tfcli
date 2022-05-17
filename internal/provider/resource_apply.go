@@ -68,6 +68,13 @@ func resourceApply() *schema.Resource {
 			"registry":   schemaRegistry(),
 			"extra_file": schemaFile(),
 
+			"skip_destroy": {
+				Description: "Set to true to skip destroy",
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Default:     false,
+			},
+
 			"output": {
 				Description: "Terraform output",
 				Type:        schema.TypeMap,
